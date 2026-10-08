@@ -1,0 +1,101 @@
+import { selectRange, playbackRange } from './audio-helpers.mjs';
+import { _electron as electron } from '@playwright/test';
+import { mkdtemp, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import { encodeWave, decodeWave } from '../shared/audio.mjs';
+
+const folder = await mkdtemp(path.join(os.tmpdir(), 'cation-audio-smoke-'));
+await mkdir('artifacts/audio', { recursive: true });
+const rate = 48000, channels = [440, 660].map((frequency, c) => Float32Array.from({ length: rate * 4 }, (_, i) => {
+  const t = i / rate, envelope = .15 + .45 * Math.exp(-((t % .5) * 8));
+  return envelope * Math.sin(2 * Math.PI * frequency * t) * (c ? .75 : 1);
+}));
+const stereo = path.join(folder, 'stereo.wav'), mono = path.join(folder, 'mono.wav');
+await writeFile(stereo, encodeWave(channels, rate)); await writeFile(mono, encodeWave([channels[0]], rate));
+const app = await electron.launch({ executablePath: process.env.VIEWER_EXECUTABLE, args: [...(process.env.VIEWER_EXECUTABLE ? [] : ['.']), stereo, `--user-data-dir=${path.join(folder, 'profile')}`], env: { ...process.env, VITE_DEV_SERVER_URL: '' } });
+try {
+  const page = await app.firstWindow(), errors = []; page.on('pageerror', error => errors.push(error.message));
+  page.setDefaultTimeout(15000);
+  await page.waitForFunction(() => document.querySelector('.audio-workspace')?.dataset.name === 'stereo.wav');
+  assert.match(await page.locator('#audio-info').textContent(), /Stereo.*48,000.*00:04.000/);
+  assert.equal(await page.locator('[data-media-view=model3d]').first().isVisible(), false);
+  assert.equal(await page.locator('.scene-panel').isVisible(), false);
+  assert.deepEqual(await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.map(i => i.label)), ['File', 'Edit', 'Effects', 'Playback', 'View', 'Settings']);
+  await page.evaluate(() => {
+    const start = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) { window.audioTestSource = this; const analyser = this.context.createAnalyser(); this.connect(analyser); window.audioTestAnalyser = analyser; return start.apply(this, args); };
+  });
+  const wave = await page.locator('#audio-wave-area').boundingBox();
+  await page.mouse.move(wave.x + 52 + (wave.width - 52) * .25, wave.y + 90); await page.mouse.down();
+  await page.mouse.move(wave.x + 52 + (wave.width - 52) * .6, wave.y + 90, { steps: 8 }); await page.mouse.up();
+  await page.screenshot({ path: 'artifacts/audio/stereo-selection.png' });
+  await app.evaluate(({ Menu }) => { Menu.prototype.popup = function () { globalThis.audioContextMenu = this; }; });
+  await page.locator('#audio-wave-area').click({ button: 'right' });
+  assert.equal(await app.evaluate(() => globalThis.audioContextMenu.getMenuItemById('trim').enabled), true);
+  assert.equal(await app.evaluate(() => globalThis.audioContextMenu.items.find(i => i.label === 'Convert To…').submenu.items.length), 10);
+  assert.equal(await page.locator('.audio-topbar, .audio-inspector').count(), 0);
+  await page.locator('#audio-loop').click(); await page.locator('#audio-play').click();
+  await page.waitForFunction(() => document.querySelector('#audio-clock').textContent > '00:01.100');
+  const playing = await page.evaluate(() => { const source = window.audioTestSource, values = new Float32Array(window.audioTestAnalyser.fftSize); window.audioTestAnalyser.getFloatTimeDomainData(values); return { loop: source.loop, start: source.loopStart, end: source.loopEnd, channels: source.buffer.numberOfChannels, signal: Math.max(...values.map(Math.abs)), state: source.context.state }; });
+  assert.equal(playing.loop, true); assert.equal(playing.channels, 2); assert.equal(playing.state, 'running'); assert.ok(playing.signal > .01); assert.ok(Math.abs(playing.start - 1) < .02); assert.ok(Math.abs(playing.end - 2.4) < .02);
+  await page.waitForTimeout(1600); // cross the selection end and confirm loop remains inside it
+  const clock = await page.locator('#audio-clock').textContent(); assert.ok(clock >= '00:01.000' && clock <= '00:02.410');
+  await page.locator('#audio-play').click(); const paused = await page.locator('#audio-clock').textContent(); await page.waitForTimeout(80); assert.equal(await page.locator('#audio-clock').textContent(), paused);
+  await page.locator('#audio-stop').click();
+  const [selectionStart, selectionEnd] = await selectRange(page, 1, 2, 4);
+  const first = Math.round(selectionStart * rate), last = Math.round(selectionEnd * rate);
+  const menuCommand = (menu, label) => app.evaluate(({ Menu }, { menu, label }) => Menu.getApplicationMenu().items.find(item => item.label === menu).submenu.items.find(item => item.label === label).click(), { menu, label });
+  const save = async (format, name, selected = false) => {
+    const file = path.join(folder, `${name}.${format}`);
+    await app.evaluate(({ dialog }, file) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: file }); }, file);
+    await menuCommand('File', 'Save as / Convert…'); await page.locator('#audio-format').selectOption(format); await page.locator('#audio-quality').selectOption('maximum');
+    if (selected) await page.locator('#audio-export-selection').check(); else await page.locator('#audio-export-selection').uncheck();
+    await page.locator('#audio-save').click();
+    await page.waitForFunction(() => document.querySelector('#audio-export-dialog').open === false || document.querySelector('#message').textContent.includes('Error'));
+    assert.ok((await stat(file)).size > 100); await page.locator('#message button').click(); return file;
+  };
+  const effect = async (id, value) => { await menuCommand('Effects', { gain: 'Volume…', stretch: 'Time stretch…' }[id]); await page.locator(`#audio-${id}`).fill(String(value)); await page.locator('#audio-apply-effect').click(); await page.waitForFunction(() => document.querySelector('#loading').hidden); assert.equal(await page.locator('#message').isVisible(), false); };
+  await effect('gain', -6);
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 2 }); });
+  await page.locator('#file-input').setInputFiles(mono); await page.waitForFunction(() => document.querySelector('#loading').hidden);
+  assert.equal(await page.locator('.audio-workspace').getAttribute('data-name'), 'stereo.wav');
+  const gain = decodeWave(new Uint8Array(await readFile(await save('wav', 'gain'))));
+  assert.deepEqual(gain.channels[0].slice(0, first), channels[0].slice(0, first)); assert.deepEqual(gain.channels[1].slice(last), channels[1].slice(last));
+  assert.ok(Math.abs(gain.channels[0][first + 100] / channels[0][first + 100] - .501187) < .001);
+  await page.locator('#audio-undo').click(); await page.locator('#audio-redo').click(); await page.locator('#audio-undo').click();
+  await effect('stretch', 200);
+  const stretchedRange = await playbackRange(page);
+  assert.ok(Math.abs(stretchedRange[1] - selectionStart - 2 * (selectionEnd - selectionStart)) < .001);
+  await page.locator('#audio-undo').click(); assert.match(await page.locator('#audio-info').textContent(), /00:04.000/);
+  await menuCommand('Effects', 'Fade in…'); await page.locator('#audio-apply-effect').click(); await page.waitForFunction(() => document.querySelector('#loading').hidden); await page.locator('#audio-undo').click();
+  await menuCommand('Effects', 'Fade out…'); await page.locator('#audio-apply-effect').click(); await page.waitForFunction(() => document.querySelector('#loading').hidden); await page.locator('#audio-undo').click();
+  await page.locator('#audio-find-loops').click(); await page.waitForFunction(() => !document.querySelector('#loading').hidden === false);
+  assert.equal(await page.locator('.audio-loop-region').count(), 0);
+  assert.match(await page.locator('#message').textContent(), /at least 6 seconds/); await page.locator('#message button').click();
+  await selectRange(page, 1, 2, 4);
+  await page.locator('#audio-zoom-selection').click(); await page.waitForFunction(() => Number(document.querySelector('#audio-scroll').max) > 0); await page.locator('#audio-fit').click();
+  await page.locator('#audio-trim').click(); await page.waitForFunction(() => document.querySelector('#loading').hidden); assert.ok((await playbackRange(page))[1] < 4);
+  await page.locator('#audio-undo').click();
+  await page.locator('#audio-delete').click(); await page.waitForFunction(() => document.querySelector('#loading').hidden); assert.match(await page.locator('#audio-state').textContent(), /Edited/); await page.locator('#audio-undo').click();
+  await page.locator('#audio-clear').click(); const mp3 = await save('mp3', 'export');
+  await page.locator('#file-input').setInputFiles(mp3); await page.waitForFunction(() => document.querySelector('.audio-workspace').dataset.name === 'export.mp3');
+  assert.match(await page.locator('#audio-info').textContent(), /Stereo/);
+  const broken = path.join(folder, 'broken.mp3'); await writeFile(broken, 'invalid data'); await page.locator('#file-input').setInputFiles(broken); await page.waitForFunction(() => document.querySelector('#loading').hidden);
+  assert.equal(await page.locator('.audio-workspace').getAttribute('data-name'), 'export.mp3'); assert.equal(await page.locator('#message').isVisible(), true); await page.locator('#message button').click();
+  await page.locator('#file-input').setInputFiles(mono); await page.waitForFunction(() => document.querySelector('.audio-workspace').dataset.name === 'mono.wav');
+  assert.match(await page.locator('#audio-info').textContent(), /Mono/);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 620));
+  await page.waitForTimeout(100); await page.screenshot({ path: 'artifacts/audio/mono-minimum-window.png' });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight), false);
+  for (const id of ['audio-play', 'audio-wave-area', 'audio-fade-selection-in', 'audio-fade-selection-out', 'audio-trim']) { const box = await page.locator(`#${id}`).boundingBox(); const height = await page.evaluate(() => innerHeight); assert.ok(box.y + box.height <= height && box.height > 0, id); }
+  await menuCommand('File', 'Save as / Convert…'); await app.evaluate(({ dialog }) => { dialog.showSaveDialog = async () => ({ canceled: true }); }); await page.locator('#audio-save').click(); await page.waitForFunction(() => document.querySelector('#loading').hidden); assert.equal(await page.locator('#audio-export-dialog').isVisible(), true); await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(i => i.label === 'Load 3D demo').click());
+  await page.locator('#stats').filter({ hasText: '3 meshes' }).waitFor(); assert.equal(await page.locator('#audio-wave-area').isVisible(), false);
+  assert.deepEqual(await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.map(i => i.label)), ['File', 'View', 'Settings']);
+  await page.getByRole('button', { name: 'Wireframe', exact: true }).click(); await page.getByRole('button', { name: 'Play animation', exact: true }).click();
+  await page.waitForFunction(() => Number(document.querySelector('#seek').value) > .1);
+  assert.deepEqual(errors, []); console.log(`PASS audio UI, actual playback signal, selection looping, effects, undo/redo, exports, invalid-file recovery, cancellation, mono/stereo, 900x620 layout and return to 3D. Files: ${folder}`);
+} catch (error) { const page = await app.firstWindow(); await page.screenshot({ path: 'artifacts/audio/failure.png' }).catch(() => {}); throw error; }
+finally { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close(); }

@@ -1,0 +1,91 @@
+import { _electron as electron } from '@playwright/test';
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { encodeWave, decodeWave } from '../shared/audio.mjs';
+import { selectRange } from './audio-helpers.mjs';
+
+const folder = await mkdtemp(path.join(os.tmpdir(), 'cation-save-prompt-'));
+const original = encodeWave([Float32Array.from({ length: 44100 * 2 }, (_, i) => .4 * Math.cos(i / 10))], 44100);
+const input = path.join(folder, 'original.wav'), output = path.join(folder, 'saved.wav');
+await writeFile(input, original);
+const app = await electron.launch({ executablePath: process.env.VIEWER_EXECUTABLE, args: [...(process.env.VIEWER_EXECUTABLE ? [] : ['.']), input, `--user-data-dir=${path.join(folder, 'profile')}`], env: { ...process.env, VITE_DEV_SERVER_URL: '' } });
+try {
+  const page = await app.firstWindow(), errors = [];
+  page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(15000);
+  await page.waitForFunction(() => document.querySelector('.audio-workspace')?.dataset.name === 'original.wav');
+  await page.waitForFunction(() => document.querySelector('#audio-play').innerHTML.includes('player-pause'));
+  await page.locator('#audio-stop').click();
+  const choice = async (response, savePath = null) => app.evaluate(({ dialog }, { response, savePath }) => {
+    globalThis.lastPrompt = null; globalThis.saveCalls = 0;
+    dialog.showMessageBox = async (_, options) => { globalThis.lastPrompt = options; return { response }; };
+    dialog.showSaveDialog = async (_, options) => { globalThis.lastSaveOptions = options; globalThis.saveCalls++; return { canceled: !savePath, filePath: savePath }; };
+  }, { response, savePath });
+  const home = () => app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(i => i.label === 'Home').click());
+  const settled = () => page.waitForFunction(() => document.querySelector('#loading').hidden);
+  const assertRetained = async () => {
+    await settled(); assert.equal(await page.locator('.audio-workspace').isVisible(), true);
+    assert.match(await page.locator('#audio-state').textContent(), /Edited/);
+  };
+  const edit = async () => { await page.locator('#audio-all').click(); await page.locator('#audio-fade-selection-in').click(); await settled(); };
+  await edit(); await selectRange(page, .5, 1, 2);
+  await choice(2); await home(); await assertRetained();
+  const prompt = await app.evaluate(() => globalThis.lastPrompt);
+  assert.deepEqual(prompt.buttons, ['Save changes', 'Do not save changes', 'Cancel']);
+  assert.equal(prompt.defaultId, 0); assert.equal(prompt.cancelId, 2);
+  const saveAs = async () => {
+    await page.keyboard.press('Control+Shift+S');
+    await page.locator('#audio-export-dialog').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#audio-format').inputValue(), 'wav');
+    await page.locator('#audio-quality').selectOption('maximum');
+    await page.locator('#audio-export-selection').uncheck();
+    await page.locator('#audio-save').click(); await settled();
+  };
+  await choice(0); await saveAs(); await assertRetained();
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 1);
+  assert.equal(await app.evaluate(() => globalThis.lastSaveOptions.defaultPath), input);
+  await page.keyboard.press('Escape');
+  await choice(0, path.join(folder, 'missing', 'cannot-write.wav')); await saveAs();
+  await page.locator('#message').waitFor({ state: 'visible' }); await assertRetained();
+  await page.keyboard.press('Escape'); await page.locator('#message button').click();
+  await choice(0, output); await saveAs();
+  assert.equal(await page.locator('#filename').textContent(), 'saved.wav');
+  await page.keyboard.press('Control+Z'); await settled();
+  assert.match(await page.locator('#filename').textContent(), /\*/);
+  await page.keyboard.press('Control+Y'); await settled();
+  assert.equal(await page.locator('#filename').textContent(), 'saved.wav');
+  const saved = decodeWave(new Uint8Array(await readFile(output)));
+  assert.equal(saved.channels[0].length, 44100 * 2, 'Save as must include the entire file');
+  assert.equal(saved.channels[0][0], 0);
+  assert.deepEqual(new Uint8Array(await readFile(input)), original, 'Save as must preserve the source');
+  await edit(); await choice(0); await page.keyboard.press('Control+S'); await settled();
+  assert.equal(await page.locator('#filename').textContent(), 'saved.wav');
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 0, 'Ctrl+S must save without a dialog');
+  await edit();
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyS', key: 'ы', ctrlKey: true, bubbles: true, cancelable: true })));
+  await settled();
+  assert.equal(await page.locator('#filename').textContent(), 'saved.wav', 'Ctrl+Ы must save the current document');
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 0);
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyS', key: 'Ы', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })));
+  await page.locator('#audio-export-dialog').waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape');
+  await home(); await page.locator('.audio-workspace').waitFor({ state: 'hidden' });
+  await page.locator('#file-input').setInputFiles(input); await page.locator('.audio-workspace').waitFor({ state: 'visible' });
+  await edit(); await choice(1); await home(); await page.locator('.audio-workspace').waitFor({ state: 'hidden' });
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 0);
+  await page.locator('#file-input').setInputFiles(input); await page.locator('.audio-workspace').waitFor({ state: 'visible' });
+  await edit(); await choice(2);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+  await assertRetained();
+  // Quit must leave the codec alive until the requested save completes.
+  await choice(0);
+  await app.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); });
+  await page.waitForEvent('close');
+  assert.equal(decodeWave(new Uint8Array(await readFile(input))).channels[0].length, 88200);
+  assert.deepEqual(errors, []);
+  console.log('PASS: shell autoplay, dirty/undo/redo, Ctrl+S, Save as folder and format, canceled save, write failure, preserved source, close cancellation and save before Quit.');
+} finally {
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {});
+  await app.close().catch(() => {});
+}

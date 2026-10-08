@@ -1,0 +1,52 @@
+:root{--text:var(--impion-color-text-primary);--workspace:var(--impion-color-app-background);--surface-overlay:var(--impion-color-popup-background);--control-surface:var(--impion-color-control-background);--control-border:var(--impion-color-control-border);--panel-border:var(--impion-color-panel-border-strong);--inspector-text:var(--impion-color-text-secondary);--inspector-muted:var(--impion-color-text-muted);--active-surface:var(--impion-color-accent-soft);--active-border:var(--impion-color-accent);--panel-padding:24px 20px;--toolbar-padding:12px 18px;--wave-center:var(--impion-color-scrollbar-thumb);--playhead:var(--impion-color-warning)}
+.inspector-field{display:grid;grid-template-columns:minmax(0,1fr) minmax(70px,1fr);gap:10px;align-items:center;margin-bottom:10px;font-size:11px;color:var(--inspector-text)}
+.inspector-field input,.inspector-field select{min-width:0;max-width:100%;width:100%;padding:5px 6px;border:1px solid var(--control-border);border-radius:4px;background:var(--control-surface);color:var(--text)}
+.inspector-field input[type=color]{height:28px;padding:3px}.inspector-field input[type=checkbox]{justify-self:end}
+.inspector-note{font-size:10px;line-height:1.6;color:var(--inspector-muted);margin:6px 0 14px;overflow-wrap:anywhere}
+.display-panel{padding:var(--panel-padding)}
+.tools{border-color:var(--panel-border);background:var(--surface-overlay)}
+.tools button[aria-pressed=true]{color:var(--accent);background:var(--active-surface);border-color:var(--active-border)}
+:root{--control-hover-surface:var(--impion-color-control-background-hover);--control-hover-border:var(--impion-color-panel-border-strong);--control-active-hover-surface:var(--impion-color-control-background-active)}
+.tools button,.modes button{transition:background-color 100ms ease,border-color 100ms ease,color 100ms ease}
+.tools button:not(:disabled):hover,.modes button:not(:disabled):hover{background:var(--control-hover-surface);border-color:var(--control-hover-border);color:var(--text)}
+.tools button[aria-pressed=true]:not(:disabled):hover,.modes button[aria-pressed=true]:not(:disabled):hover{background:var(--control-active-hover-surface);border-color:var(--accent);color:var(--accent)}
+.tools button:focus-visible,.modes button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){.tools button,.modes button{transition:none}}
+:root{--compact-tool-size:25.6px;--compact-icon-size:16px;--status-height:30px;--error-text:var(--impion-color-danger)}
+.media-toolbar.tools{position:static;display:flex;flex-direction:row;align-items:center;gap:4px;padding:6px 12px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:var(--surface);box-shadow:none;flex-shrink:0;width:100%;min-width:0}
+.media-toolbar.tools button{width:var(--compact-tool-size);height:var(--compact-tool-size);padding:4px;flex-shrink:0;display:grid;place-items:center}
+.media-toolbar.tools button svg{width:var(--compact-icon-size);height:var(--compact-icon-size)}
+.media-tool-group{display:flex;align-items:center;gap:4px;flex-shrink:0}.media-tool-group:last-child{margin-left:auto}
+.media-divider{height:20px;width:1px;background:var(--border);margin:0 5px;flex-shrink:0}
+.media-status{display:flex;align-items:center;gap:12px;min-height:var(--status-height);padding:6px 12px;border-top:1px solid var(--border);background:var(--surface);font-size:11px;color:var(--inspector-muted);font-variant-numeric:tabular-nums;flex-shrink:0;min-width:0}
+.media-status output{white-space:nowrap;color:var(--text)}.media-status [data-info]{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.media-panel-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.media-panel-heading h2{font-size:12px;font-weight:500;margin:0}
+.media-panel-heading.tools{position:static;flex-direction:row;border-radius:0;background:var(--surface);box-shadow:none;padding:12px 16px;gap:12px}
+.media-panel-heading.tools button{width:var(--compact-tool-size);height:var(--compact-tool-size);padding:4px}.media-panel-heading.tools svg{width:var(--compact-icon-size);height:var(--compact-icon-size)}
+.inspector-section{padding:16px;border-bottom:1px solid var(--border)}.inspector-section h3{font-size:11px;font-weight:500;color:var(--text);margin:0 0 14px}
+.inspector-section .inspector-field:last-child,.inspector-section .check:last-child{margin-bottom:0}
+.inspector-slider{margin-bottom:12px}.inspector-slider .inspector-field{margin-bottom:3px}
+.inspector-slider input[type=range]{margin:0;width:100%;height:20px}
+input[type=range]{appearance:none;-webkit-appearance:none;background:transparent;cursor:pointer;touch-action:pan-y;border:0;padding:0}
+input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:linear-gradient(to right,var(--accent) var(--range-fill,0%),var(--control-border) var(--range-fill,0%))}
+input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--surface);margin-top:-4.5px}
+input[type=range]:not(:disabled):hover::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--control-hover-surface)}
+input[type=range]::-moz-range-track{height:3px;border-radius:2px;background:var(--control-border)}input[type=range]::-moz-range-progress{height:3px;background:var(--accent)}input[type=range]::-moz-range-thumb{width:10px;height:10px;border-radius:50%;background:var(--accent);border:2px solid var(--surface)}
+@media(max-width:600px){.media-toolbar.tools{padding:6px;gap:2px;flex-wrap:wrap}.media-status{gap:7px;font-size:10px;padding:6px}.media-divider{margin:0 2px}}
+
+/* Shared selection controls follow the CationUI checkbox anatomy and IMPION palette. */
+:root{--media-checkbox-size:28px;--media-checkbox-mark-width:10px;--media-checkbox-mark-height:6px;--media-checkbox-mark-thickness:2px}
+input[type=checkbox]{appearance:none;display:inline-grid;place-items:center;flex:none;width:var(--media-checkbox-size);height:var(--media-checkbox-size);min-height:0;margin:0;padding:0;border:1px solid var(--impion-color-panel-border-strong);border-radius:4px;background:var(--impion-color-surface-input);cursor:pointer}
+input[type=checkbox]:hover{border-color:var(--impion-color-main);background:color-mix(in srgb,var(--impion-color-surface-input) 86%,var(--impion-color-main))}
+input[type=checkbox]:checked{border-color:var(--impion-color-main);background:var(--impion-color-main)}
+input[type=checkbox]:checked:hover{border-color:var(--impion-color-main-hover);background:var(--impion-color-main-hover)}
+input[type=checkbox]:checked::before{width:var(--media-checkbox-mark-width);height:var(--media-checkbox-mark-height);border-bottom:var(--media-checkbox-mark-thickness) solid var(--impion-color-text-primary);border-left:var(--media-checkbox-mark-thickness) solid var(--impion-color-text-primary);content:"";transform:translateY(-1px) rotate(-45deg)}
+
+/* Half-width desktop scrollbars, shared by every app surface. */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:var(--impion-color-scrollbar-track)}
+::-webkit-scrollbar-thumb{background:var(--impion-color-scrollbar-thumb);border:2px solid var(--impion-color-scrollbar-track);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--impion-color-scrollbar-thumb-hover)}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:var(--impion-color-scrollbar-thumb) var(--impion-color-scrollbar-track)}}

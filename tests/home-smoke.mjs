@@ -1,0 +1,70 @@
+import { _electron as electron } from '@playwright/test';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import { encodeWave } from '../shared/audio.mjs';
+
+const folder = await mkdtemp(path.join(os.tmpdir(), 'cation-home-'));
+await mkdir('artifacts/home', { recursive: true });
+const sound = path.join(folder, 'sound.wav'), model = path.join(folder, 'model.obj'), texture = path.join(folder, 'Body.png'), unsupported = path.join(folder, 'note.txt');
+await writeFile(sound, encodeWave([Float32Array.from({ length: 48000 }, (_, i) => .2 * Math.sin(i * 2 * Math.PI * 440 / 48000))], 48000));
+await writeFile(model, 'mtllib model.mtl\no Panel\nv -1 -1 0\nv 1 -1 0\nv 1 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nusemtl Body\nf 1/1 2/2 3/3\n');
+await writeFile(path.join(folder, 'model.mtl'), 'newmtl Body\nKd 1 1 1\nmap_Kd Body.png\n'); await writeFile(unsupported, 'not media');
+const executablePath = process.env.VIEWER_EXECUTABLE;
+const app = await electron.launch({ executablePath, args: [...(executablePath ? [] : ['.']), `--user-data-dir=${path.join(folder, 'profile')}`], env: { ...process.env, VITE_DEV_SERVER_URL: '' } });
+try {
+  const page = await app.firstWindow(); page.setDefaultTimeout(15000);
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.getByRole('button', { name: 'Sounds', exact: true }).waitFor();
+  assert.equal(await page.title(), 'CationMedia'); assert.equal(await page.locator('#viewport').isVisible(), false);
+  assert.equal(await page.locator('#tree').textContent(), '');
+  assert.equal(await page.locator('#audio-wave-area').isVisible(), false);
+  await page.locator('.home-brand img').evaluate(img => img.decode());
+  await page.screenshot({ path: 'artifacts/home/start.png' });
+  const goHome = async () => { await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(i => i.label === 'Home').click()); await page.getByRole('button', { name: 'Sounds', exact: true }).waitFor(); };
+  await app.evaluate(({ dialog }) => { dialog.showOpenDialog = async (_, options) => { globalThis.homeFilter = options.filters; return { canceled: true, filePaths: [] }; }; });
+  await page.getByRole('button', { name: 'Sounds', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('#loading').hidden);
+  assert.equal(await app.evaluate(() => globalThis.homeFilter[0].name), 'Audio');
+  assert.equal(await page.locator('.home-screen').isVisible(), true);
+  await page.getByRole('button', { name: 'Viewer 3D', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('#loading').hidden);
+  assert.ok((await app.evaluate(() => globalThis.homeFilter[0].extensions)).includes('glb'));
+  const cdp = await page.context().newCDPSession(page);
+  const drop = async (files, selector, corner = false) => {
+    const box = await page.locator(selector).boundingBox(), x = corner ? box.x + 5 : box.x + box.width / 2, y = corner ? box.y + 5 : box.y + box.height / 2;
+    for (const type of ['dragEnter', 'dragOver']) await cdp.send('Input.dispatchDragEvent', { type, x, y, data: { items: [], files, dragOperationsMask: 1 } });
+    assert.equal(await page.locator('#drop-overlay').isVisible(), true);
+    await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data: { items: [], files, dragOperationsMask: 1 } });
+    await page.waitForFunction(() => document.querySelector('#loading').hidden);
+    assert.equal(await page.locator('#drop-overlay').isVisible(), false);
+  };
+  await drop([sound], '#home-viewer');
+  assert.equal(await page.locator('.audio-workspace').getAttribute('data-name'), 'sound.wav');
+  await goHome();
+  const png = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 4; const x = c.getContext('2d'); x.fillStyle = '#79dfb6'; x.fillRect(0, 0, 4, 4); return c.toDataURL().split(',')[1]; });
+  await writeFile(texture, Buffer.from(png, 'base64'));
+  await drop([model, texture], '.home-screen', true);
+  assert.equal(await page.locator('#filename').textContent(), 'model.obj'); assert.match(await page.locator('#stats').textContent(), /1 meshes/);
+  assert.equal(await page.locator('#message').isVisible(), false);
+  await drop([texture], '#search'); assert.equal(await page.locator('#message').isVisible(), false);
+  await drop([sound], '.display-panel[data-media-view=model3d]'); assert.equal(await page.locator('.audio-workspace').getAttribute('data-name'), 'sound.wav');
+  await drop([model], '#audio-scroll'); assert.equal(await page.locator('#filename').textContent(), 'model.obj');
+  await goHome(); await drop([unsupported], '#home-sounds');
+  assert.equal(await page.locator('.home-screen').isVisible(), true); assert.equal(await page.locator('#message').isVisible(), true); await page.locator('#message button').click();
+  await page.evaluate(() => { const transfer = new DataTransfer(); transfer.setData('text/plain', 'ordinary text'); window.dispatchEvent(new DragEvent('dragenter', { dataTransfer: transfer })); });
+  assert.equal(await page.locator('#drop-overlay').isVisible(), false);
+  await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x: 300, y: 250, data: { items: [], files: [sound], dragOperationsMask: 1 } });
+  await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 300, y: 250, data: { items: [], files: [sound], dragOperationsMask: 1 } });
+  await page.keyboard.press('Escape'); assert.equal(await page.locator('#drop-overlay').isVisible(), false);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 620));
+  await page.waitForFunction(() => innerWidth < 950);
+  await page.screenshot({ path: 'artifacts/home/minimum.png' });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight), false);
+  await app.evaluate(({ dialog }, sound) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [sound] }); }, sound);
+  await page.getByRole('button', { name: 'Sounds', exact: true }).click(); await page.waitForFunction(() => document.querySelector('.audio-workspace').dataset.name === 'sound.wav' && document.querySelector('#app').dataset.mediaType === 'audio');
+  assert.deepEqual(errors, []); console.log('PASS: empty launch, both filtered buttons, cancel, full-window native file drops on cards/edges/inputs/panels, model+texture batch, media switching, unsupported files, drag cancellation, Home and minimum layout.');
+} finally { await app.close(); }
+
+

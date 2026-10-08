@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+	<defs><clipPath id="sphere"><circle cx="12" cy="12" r="9.15"/></clipPath></defs>
+	<circle cx="12" cy="12" r="9.15" fill="#e8eaed" stroke="#f1f3f5" stroke-width="1.35"/>
+	<path d="M12 2.85a9.15 9.15 0 0 1 0 18.3V2.85Z" fill="#555b63" clip-path="url(#sphere)"/>
+	<path d="M12 3.5v17" fill="none" stroke="#f1f3f5" stroke-opacity=".78" stroke-width="1.1"/>
+</svg>

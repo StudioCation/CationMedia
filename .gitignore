@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+.env*
+artifacts/
+output/playwright/
+.playwright-cli/
+.image-drag-test-*/
+__pycache__/
+*.pyc
+*.log
+public/decoders/

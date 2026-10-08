@@ -1,0 +1,76 @@
+import { _electron as electron } from '@playwright/test';
+import { createServer } from 'vite';
+import { writePsdBuffer } from 'ag-psd';
+import { mkdir, writeFile, mkdtemp } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+
+const folder = await mkdtemp(path.join(os.tmpdir(), 'cation-workspace-'));
+const data = new Uint8ClampedArray(4 * 4 * 4);
+for (let i = 0; i < data.length; i += 4) data.set([230, 40, 20, 255], i);
+await writeFile(path.join(folder, 'Red.psd'), writePsdBuffer({ width: 4, height: 4, imageData: { width: 4, height: 4, data } }));
+await writeFile(path.join(folder, 'broken.psd'), 'invalid');
+await mkdir(path.join(folder, 'textures'));
+await writeFile(path.join(folder, 'model.obj'), 'mtllib model.mtl\no Panel\nv -1 -1 0\nv 1 -1 0\nv 1 1 0\nv -1 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nusemtl Red\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n');
+await writeFile(path.join(folder, 'model.mtl'), 'newmtl Red\nKd 1 1 1\nmap_Kd C:/old/export/Red.psd\n');
+const server = (process.env.VIEWER_EXECUTABLE || process.env.VIEWER_TEST_URL) ? null : await createServer({ server: { port: 5174, strictPort: true, host: '127.0.0.1' } });
+await server?.listen();
+console.log(process.env.VIEWER_EXECUTABLE ? `Packaged app: ${process.env.VIEWER_EXECUTABLE}` : 'Test URL http://127.0.0.1:5174');
+const app = await electron.launch({ executablePath: process.env.VIEWER_EXECUTABLE, args: [...(process.env.VIEWER_EXECUTABLE ? [] : ['.']), `--user-data-dir=${path.join(folder, 'profile')}`], env: { ...process.env, VITE_DEV_SERVER_URL: process.env.VIEWER_EXECUTABLE ? '' : (process.env.VIEWER_TEST_URL || 'http://127.0.0.1:5174') } });
+try {
+  const page = await app.firstWindow(); page.setDefaultTimeout(15000);
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.getByRole('button', { name: 'Viewer 3D', exact: true }).waitFor();
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(i => i.label === 'Load 3D demo').click());
+  await page.locator('#stats').filter({ hasText: '3 meshes' }).waitFor();
+  await page.evaluate(() => localStorage.removeItem('cation-viewer.panels'));
+  assert.deepEqual(await page.locator('[data-mode]').evaluateAll(items => items.map(item => item.dataset.mode)), ['normals', 'wire', 'solid', 'materials']);
+  const viewport = await page.locator('#viewport').boundingBox();
+  await page.mouse.click(viewport.x + viewport.width / 2, viewport.y + viewport.height * 0.43);
+  await page.locator('.tree-row.selected').waitFor();
+  assert.match(await page.locator('#stats').textContent(), /vertices.*triangles/);
+  assert.ok(await page.locator('.material-names').count() >= 3);
+  for (const [key, dx, dy] of [['left', 45, 0], ['right', -40, 0]]) {
+    const handle = page.locator(`[data-resize=${key}]:visible`), box = await handle.boundingBox();
+    const before = Number(await handle.getAttribute('aria-valuenow'));
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 5 }); await page.mouse.up();
+    assert.ok(Number(await handle.getAttribute('aria-valuenow')) > before + 20, key);
+  }
+  await page.getByRole('button', { name: 'Normals', exact: true }).click();
+  // Real native file drop, including PSD composite decoding and the selected target.
+  const cdp = await page.context().newCDPSession(page);
+  const drag = { items: [], files: [path.join(folder, 'Red.psd')], dragOperationsMask: 1 };
+  for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', { type, x: 600, y: 350, data: drag });
+  await page.waitForFunction(() => document.querySelector('[data-mode=materials]').getAttribute('aria-pressed') === 'true');
+  assert.equal(await page.locator('#message').isVisible(), false);
+  await page.screenshot({ path: path.join(folder, 'selected-psd.png') });
+  await page.locator('#file-input').setInputFiles(path.join(folder, 'model.obj'));
+  await page.waitForFunction(() => document.querySelector('#filename').textContent === 'model.obj');
+  assert.equal(await page.locator('#message').isVisible(), false, await page.locator('#message').textContent());
+  await page.screenshot({ path: path.join(folder, 'nearby-psd.png') });
+  const png = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 4; const context = canvas.getContext('2d'); context.fillStyle = '#2255ff'; context.fillRect(0, 0, 4, 4); return canvas.toDataURL().split(',')[1]; });
+  await writeFile(path.join(folder, 'Blue.png'), Buffer.from(png, 'base64'));
+  await page.locator('#file-input').setInputFiles(path.join(folder, 'Blue.png'));
+  await page.waitForFunction(() => document.querySelector('#loading').hidden);
+  assert.equal(await page.locator('#message').isVisible(), false);
+  await page.screenshot({ path: path.join(folder, 'dropped-png.png') });
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(item => item.label === 'Load 3D demo').click());
+  await page.locator('#file-input').setInputFiles([path.join(folder, 'model.obj'), path.join(folder, 'Blue.png')]);
+  await page.waitForFunction(() => document.querySelector('#filename').textContent === 'model.obj');
+  assert.equal(await page.locator('#message').isVisible(), false);
+  await page.screenshot({ path: path.join(folder, 'combined-drop.png') });
+  await page.locator('#file-input').setInputFiles(path.join(folder, 'broken.psd'));
+  await page.locator('#message').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#message').textContent(), /Unable to apply textures/);
+  await page.getByRole('button', { name: 'Dismiss message' }).click();
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[2].submenu.items.find(item => item.label === 'Default apps…').click());
+  await page.locator('#defaults-dialog').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#defaults-dialog').textContent(), /\.glb/);
+  await page.locator('#close-defaults').click();
+  assert.deepEqual(errors, []);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(900, 620));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: path.join(folder, 'minimum-window.png') });
+  console.log(`PASS: selection, statistics, material labels, panel resizing, PSD drop, nearby PSD, broken PSD recovery, defaults help. Screenshots: ${folder}`);
+} finally { await app.close(); await server?.close(); }

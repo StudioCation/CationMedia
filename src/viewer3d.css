@@ -1,0 +1,9 @@
+.modes .view-mode-icon{display:block;width:18px;height:18px;opacity:.72;background-image:url('/viewer-icons/view-mode-spheres.png');background-repeat:no-repeat;background-size:480% 160%;background-position:2% 50%}
+.modes button:hover .view-mode-icon,.modes button[aria-pressed=true] .view-mode-icon{opacity:1}
+.modes .view-mode-wire{background-image:url('/viewer-icons/view-mode-grid.svg');background-size:contain;background-position:center}
+.modes .view-mode-solid{background-position-x:34%}
+.modes .view-mode-normals{background-image:url('/viewer-icons/view-mode-normals.svg');background-size:contain;background-position:center}
+.modes .view-mode-materials{background-position-x:98%}
+.modes .view-mode-vertex{background-image:url('/viewer-icons/view-mode-vertex.svg');background-size:contain;background-position:center}
+.modes .view-mode-weights{background-image:url('/viewer-icons/view-mode-weights.svg');background-size:contain;background-position:center}
+#weight-bone-field select{min-width:0;max-width:130px;padding:5px 7px;font-size:11px}
